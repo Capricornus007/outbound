@@ -1,4 +1,4 @@
-//go:build linux || android || freebsd || openbsd
+//go:build linux
 
 /*
  * SPDX-License-Identifier: AGPL-3.0-only
@@ -11,24 +11,14 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
-	"runtime"
 	"syscall"
 
 	"golang.org/x/sys/unix"
 )
 
-var fwmarkIoctl int
-
-func init() {
-	switch runtime.GOOS {
-	case "linux", "android":
-		fwmarkIoctl = 36 /* unix.SO_MARK */
-	case "freebsd":
-		fwmarkIoctl = 0x1015 /* unix.SO_USER_COOKIE */
-	case "openbsd":
-		fwmarkIoctl = 0x1021 /* unix.SO_RTABLE */
-	}
-}
+// fwmarkIoctl is SO_MARK on Linux; dae targets the Linux eBPF datapath only,
+// so the BSD/android branches of the former switch are intentionally dropped.
+var fwmarkIoctl = 36 /* unix.SO_MARK */
 
 // SoMarkControl is replacable. Replacibility is useful for Android.
 var SoMarkControl = func(c syscall.RawConn, mark int) error {
@@ -100,13 +90,11 @@ var TCPDialControl = func(c syscall.RawConn, mark int, address ...string) error 
 				return
 			}
 		}
-		if runtime.GOOS == "linux" || runtime.GOOS == "android" {
-			_ = unix.SetsockoptInt(intFd, unix.IPPROTO_TCP, unix.TCP_NODELAY, 1)
-			if !isLoopback && TCPMaxSegOverride > 0 {
-				_ = unix.SetsockoptInt(intFd, unix.IPPROTO_TCP, unix.TCP_MAXSEG, TCPMaxSegOverride)
-			}
-			_ = unix.SetsockoptInt(intFd, unix.IPPROTO_TCP, unix.TCP_FASTOPEN_CONNECT, 1)
+		_ = unix.SetsockoptInt(intFd, unix.IPPROTO_TCP, unix.TCP_NODELAY, 1)
+		if !isLoopback && TCPMaxSegOverride > 0 {
+			_ = unix.SetsockoptInt(intFd, unix.IPPROTO_TCP, unix.TCP_MAXSEG, TCPMaxSegOverride)
 		}
+		_ = unix.SetsockoptInt(intFd, unix.IPPROTO_TCP, unix.TCP_FASTOPEN_CONNECT, 1)
 	})
 	if controlErr != nil {
 		return fmt.Errorf("error invoking socket control function: %w", controlErr)

@@ -1,4 +1,4 @@
-//go:build !(linux || android || freebsd || openbsd)
+//go:build !linux
 
 /*
  * SPDX-License-Identifier: AGPL-3.0-only
