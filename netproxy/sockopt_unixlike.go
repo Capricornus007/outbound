@@ -9,6 +9,8 @@ package netproxy
 
 import (
 	"fmt"
+	"net"
+	"net/netip"
 	"runtime"
 	"syscall"
 
@@ -60,13 +62,31 @@ const (
 	tcpFastOpenConnect = 30
 )
 
+func isLoopbackTarget(address string) bool {
+	if address == "" {
+		return false
+	}
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		host = address
+	}
+	if host == "localhost" {
+		return true
+	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
 // TCPDialControl applies performance and MTU safety socket options before connect:
 // 1. fwmark if mark != 0
 // 2. TCP_NODELAY = 1
-// 3. TCP_MAXSEG = 1380 (MSS clamping)
+// 3. TCP_MAXSEG = 1380 (MSS clamping for non-loopback WAN/proxy traffic)
 // 4. TCP_FASTOPEN_CONNECT = 1 (best effort on Linux 4.11+)
-var TCPDialControl = func(c syscall.RawConn, mark int) error {
+var TCPDialControl = func(c syscall.RawConn, mark int, address ...string) error {
 	var sockOptErr error
+	isLoopback := len(address) > 0 && isLoopbackTarget(address[0])
 	controlErr := c.Control(func(fd uintptr) {
 		intFd := int(fd)
 		if mark != 0 {
@@ -77,7 +97,9 @@ var TCPDialControl = func(c syscall.RawConn, mark int) error {
 		}
 		if runtime.GOOS == "linux" || runtime.GOOS == "android" {
 			_ = unix.SetsockoptInt(intFd, unix.IPPROTO_TCP, unix.TCP_NODELAY, 1)
-			_ = unix.SetsockoptInt(intFd, unix.IPPROTO_TCP, unix.TCP_MAXSEG, SafeTCPMaxSeg)
+			if !isLoopback {
+				_ = unix.SetsockoptInt(intFd, unix.IPPROTO_TCP, unix.TCP_MAXSEG, SafeTCPMaxSeg)
+			}
 			_ = unix.SetsockoptInt(intFd, unix.IPPROTO_TCP, tcpFastOpenConnect, 1)
 		}
 	})

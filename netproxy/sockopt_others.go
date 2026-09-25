@@ -22,7 +22,7 @@ var SoMark = func(fd int, mark int) error {
 }
 
 // TCPDialControl is replacable.
-var TCPDialControl = func(c syscall.RawConn, mark int) error {
+var TCPDialControl = func(c syscall.RawConn, mark int, address ...string) error {
 	return nil
 }
 

@@ -269,7 +269,7 @@ func (d *directDialer) dialTcp(ctx context.Context, addr string, mark int, ipVer
 		dialer = *d.tcpDialer
 	}
 	dialer.Control = func(network, address string, c syscall.RawConn) error {
-		return netproxy.TCPDialControl(c, mark)
+		return netproxy.TCPDialControl(c, mark, address)
 	}
 	dialer.Resolver = d.createResolver(mark, fallback)
 	return dialer.DialContext(ctx, network, addr)
