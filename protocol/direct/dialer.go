@@ -268,12 +268,8 @@ func (d *directDialer) dialTcp(ctx context.Context, addr string, mark int, ipVer
 	} else {
 		dialer = *d.tcpDialer
 	}
-	if mark != 0 {
-		dialer.Control = func(network, address string, c syscall.RawConn) error {
-			return netproxy.SoMarkControl(c, mark)
-		}
-	} else {
-		dialer.Control = nil
+	dialer.Control = func(network, address string, c syscall.RawConn) error {
+		return netproxy.TCPDialControl(c, mark)
 	}
 	dialer.Resolver = d.createResolver(mark, fallback)
 	return dialer.DialContext(ctx, network, addr)

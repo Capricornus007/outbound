@@ -50,3 +50,39 @@ var SoMark = func(fd int, mark int) error {
 	}
 	return nil
 }
+
+const (
+	// SafeTCPMaxSeg defines a conservative TCP MSS (1380 bytes) to prevent
+	// packet drops caused by PMTU black holes when packets are encapsulated
+	// inside proxy or tunnel protocols (WireGuard, Shadowsocks, Trojan, TLS).
+	SafeTCPMaxSeg = 1380
+	// tcpFastOpenConnect is TCP_FASTOPEN_CONNECT on Linux (sockopt 30)
+	tcpFastOpenConnect = 30
+)
+
+// TCPDialControl applies performance and MTU safety socket options before connect:
+// 1. fwmark if mark != 0
+// 2. TCP_NODELAY = 1
+// 3. TCP_MAXSEG = 1380 (MSS clamping)
+// 4. TCP_FASTOPEN_CONNECT = 1 (best effort on Linux 4.11+)
+var TCPDialControl = func(c syscall.RawConn, mark int) error {
+	var sockOptErr error
+	controlErr := c.Control(func(fd uintptr) {
+		intFd := int(fd)
+		if mark != 0 {
+			if err := unix.SetsockoptInt(intFd, unix.SOL_SOCKET, fwmarkIoctl, mark); err != nil {
+				sockOptErr = fmt.Errorf("error setting SO_MARK socket option: %w", err)
+				return
+			}
+		}
+		if runtime.GOOS == "linux" || runtime.GOOS == "android" {
+			_ = unix.SetsockoptInt(intFd, unix.IPPROTO_TCP, unix.TCP_NODELAY, 1)
+			_ = unix.SetsockoptInt(intFd, unix.IPPROTO_TCP, unix.TCP_MAXSEG, SafeTCPMaxSeg)
+			_ = unix.SetsockoptInt(intFd, unix.IPPROTO_TCP, tcpFastOpenConnect, 1)
+		}
+	})
+	if controlErr != nil {
+		return fmt.Errorf("error invoking socket control function: %w", controlErr)
+	}
+	return sockOptErr
+}
