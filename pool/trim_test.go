@@ -65,3 +65,60 @@ func TestPool_JumboBufferArena(t *testing.T) {
 	require.True(t, trimmed)
 	require.Positive(t, freed)
 }
+
+func TestPool_JumboBufferArena_LifecycleHardening(t *testing.T) {
+	// Invalid parameters should return error, not panic
+	_, err := NewJumboBufferArena(0, 1024)
+	require.Error(t, err)
+	_, err = NewJumboBufferArena(4, 0)
+	require.Error(t, err)
+
+	arena, err := NewJumboBufferArena(2, 4096)
+	require.NoError(t, err)
+
+	_, idx0, ok0 := arena.Get()
+	require.True(t, ok0)
+	b1, idx1, ok1 := arena.Get()
+	require.True(t, ok1)
+	require.NotEqual(t, idx0, idx1)
+
+	// Arena exhausted
+	_, _, ok2 := arena.Get()
+	require.False(t, ok2)
+
+	// Dirty b1
+	b1[0] = 0xab
+
+	// Double-Put defense: putting idx0 twice should not corrupt free list or disarm inUse guard
+	arena.Put(idx0)
+	arena.Put(idx0) // Redundant put ignored
+
+	// idx1 is still held! Trim must NOT release pages even if threshold <= 0
+	freed, trimmed := arena.Trim(0)
+	require.False(t, trimmed)
+	require.Equal(t, 0, freed)
+	require.Equal(t, byte(0xab), b1[0], "b1 content must not be wiped by premature trim")
+
+	// Return b1
+	arena.Put(idx1)
+
+	// Now completely idle, immediate trim (threshold <= 0) should succeed
+	freed, trimmed = arena.Trim(0)
+	require.True(t, trimmed)
+	require.Positive(t, freed)
+
+	// Close fencing
+	err = arena.Close()
+	require.NoError(t, err)
+
+	// Subsequent operations must safely return without panic
+	_, _, okAfterClose := arena.Get()
+	require.False(t, okAfterClose)
+	_, trimmedAfterClose := arena.Trim(0)
+	require.False(t, trimmedAfterClose)
+	arena.Put(0) // Safe no-op
+
+	// Idempotent Close
+	err = arena.Close()
+	require.NoError(t, err)
+}

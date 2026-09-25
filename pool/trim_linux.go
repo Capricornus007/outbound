@@ -8,6 +8,7 @@
 package pool
 
 import (
+	"errors"
 	"os"
 	"runtime"
 	"runtime/debug"
@@ -39,9 +40,8 @@ func ReleasePhysicalPages(b []byte) (int, bool) {
 	}
 
 	length := end - start
-	slice := unsafe.Slice((*byte)(unsafe.Pointer(start)), length)
-	err := unix.Madvise(slice, unix.MADV_DONTNEED)
-	if err != nil {
+	_, _, errno := unix.Syscall(unix.SYS_MADVISE, start, length, uintptr(unix.MADV_DONTNEED))
+	if errno != 0 {
 		return 0, false
 	}
 	return int(length), true
@@ -56,15 +56,17 @@ type JumboBufferArena struct {
 	bufferSize    int
 	totalBuffers  int
 	freeIndices   []int
+	borrowed      []bool
 	inUse         int
 	idleRounds    int
 	isDecommitted bool
+	closed        bool
 }
 
 // NewJumboBufferArena creates a contiguous mmap arena for count buffers of size bufferSize.
 func NewJumboBufferArena(count, bufferSize int) (*JumboBufferArena, error) {
 	if count <= 0 || bufferSize <= 0 {
-		panic("invalid count or bufferSize")
+		return nil, errors.New("invalid count or bufferSize")
 	}
 
 	pageSize := os.Getpagesize()
@@ -92,6 +94,7 @@ func NewJumboBufferArena(count, bufferSize int) (*JumboBufferArena, error) {
 		bufferSize:   bufferSize,
 		totalBuffers: count,
 		freeIndices:  freeIndices,
+		borrowed:     make([]bool, count),
 	}, nil
 }
 
@@ -100,12 +103,13 @@ func (a *JumboBufferArena) Get() ([]byte, int, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if len(a.freeIndices) == 0 {
+	if a.closed || len(a.freeIndices) == 0 {
 		return nil, -1, false
 	}
 
 	idx := a.freeIndices[len(a.freeIndices)-1]
 	a.freeIndices = a.freeIndices[:len(a.freeIndices)-1]
+	a.borrowed[idx] = true
 	a.inUse++
 	a.idleRounds = 0
 	a.isDecommitted = false
@@ -115,14 +119,16 @@ func (a *JumboBufferArena) Get() ([]byte, int, bool) {
 }
 
 // Put returns a buffer back to the arena by index.
+// Double returns or invalid indices are safely ignored to prevent list corruption and in-use underflow.
 func (a *JumboBufferArena) Put(idx int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if idx < 0 || idx >= a.totalBuffers {
+	if a.closed || idx < 0 || idx >= a.totalBuffers || !a.borrowed[idx] {
 		return
 	}
 
+	a.borrowed[idx] = false
 	a.freeIndices = append(a.freeIndices, idx)
 	a.inUse--
 	if a.inUse < 0 {
@@ -131,13 +137,25 @@ func (a *JumboBufferArena) Put(idx int) {
 }
 
 // Trim yields physical memory pages back to the kernel if the arena remains
-// completely idle for threshold rounds.
+// completely idle for threshold rounds. If threshold <= 0, pages are reclaimed immediately.
 func (a *JumboBufferArena) Trim(threshold int) (int, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if a.inUse > 0 {
+	if a.closed || a.inUse > 0 {
 		a.idleRounds = 0
+		return 0, false
+	}
+
+	if threshold <= 0 {
+		if a.isDecommitted {
+			return 0, false
+		}
+		freed, ok := ReleasePhysicalPages(a.data)
+		if ok {
+			a.isDecommitted = true
+			return freed, true
+		}
 		return 0, false
 	}
 
@@ -152,10 +170,15 @@ func (a *JumboBufferArena) Trim(threshold int) (int, bool) {
 	return 0, false
 }
 
-// Close unmaps the arena memory.
+// Close unmaps the arena memory. Further Get and Trim calls will safely fail.
 func (a *JumboBufferArena) Close() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
+	if a.closed {
+		return nil
+	}
+	a.closed = true
 
 	if len(a.data) > 0 {
 		err := unix.Munmap(a.data)

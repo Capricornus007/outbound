@@ -21,8 +21,11 @@ var SoMark = func(fd int, mark int) error {
 	return nil
 }
 
+const SafeTCPMaxSeg = 1380
+
+var TCPMaxSegOverride = SafeTCPMaxSeg
+
 // TCPDialControl is replacable.
 var TCPDialControl = func(c syscall.RawConn, mark int, address ...string) error {
 	return nil
 }
-

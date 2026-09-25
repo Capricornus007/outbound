@@ -10,6 +10,7 @@ package netproxy
 import (
 	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"syscall"
@@ -27,6 +28,10 @@ const (
 
 	// UDPSEGMENT is the socket option / cmsg type (SOL_UDP, 103) for Generic Segmentation Offload.
 	UDPSEGMENT = 103
+
+	// MaxUDPGSOAggregateSize defines the Linux maximum theoretical aggregate size (64 KiB - 1).
+	// Aggregated UDP packets exceeding 65535 bytes cannot be processed by the kernel UDP stack.
+	MaxUDPGSOAggregateSize = 65535
 )
 
 // EnableUDPGRO enables UDP Generic Receive Offload on the given UDP socket.
@@ -78,10 +83,16 @@ func BuildUDPGSOControlMsg(segmentSize uint16) []byte {
 
 // WriteUDPGSO sends an aggregated buffer composed of multiple logical UDP datagrams
 // using a single sendmsg system call with UDP_SEGMENT.
+//
+// If payload exceeds MaxUDPGSOAggregateSize (65535 bytes), unix.EMSGSIZE is returned.
 func WriteUDPGSO(rawConn syscall.RawConn, payload []byte, segmentSize uint16, to unix.Sockaddr) (int, error) {
 	if len(payload) == 0 {
 		return 0, nil
 	}
+	if len(payload) > MaxUDPGSOAggregateSize {
+		return 0, unix.EMSGSIZE
+	}
+
 	if segmentSize == 0 || len(payload) <= int(segmentSize) {
 		var n int
 		var sockErr error
@@ -92,7 +103,13 @@ func WriteUDPGSO(rawConn syscall.RawConn, payload []byte, segmentSize uint16, to
 		if err != nil {
 			return 0, err
 		}
-		return n, sockErr
+		if sockErr != nil {
+			return n, sockErr
+		}
+		if n < len(payload) {
+			return n, io.ErrShortWrite
+		}
+		return n, nil
 	}
 
 	oob := BuildUDPGSOControlMsg(segmentSize)
@@ -106,10 +123,16 @@ func WriteUDPGSO(rawConn syscall.RawConn, payload []byte, segmentSize uint16, to
 	if err != nil {
 		return 0, err
 	}
-	return n, sockErr
+	if sockErr != nil {
+		return n, sockErr
+	}
+	if n < len(payload) {
+		return n, io.ErrShortWrite
+	}
+	return n, nil
 }
 
-// SockaddrFromAddrPort converts netip.AddrPort to a unix.Sockaddr.
+// SockaddrFromAddrPort converts netip.AddrPort to a unix.Sockaddr, preserving IPv6 ZoneId.
 func SockaddrFromAddrPort(ap netip.AddrPort) unix.Sockaddr {
 	if !ap.IsValid() {
 		return nil
@@ -121,8 +144,17 @@ func SockaddrFromAddrPort(ap netip.AddrPort) unix.Sockaddr {
 			Addr: ap.Addr().As4(),
 		}
 	}
+
+	var zoneId uint32
+	if zone := ap.Addr().Zone(); zone != "" {
+		if ifi, err := net.InterfaceByName(zone); err == nil {
+			zoneId = uint32(ifi.Index)
+		}
+	}
+
 	return &unix.SockaddrInet6{
-		Port: port,
-		Addr: ap.Addr().As16(),
+		Port:   port,
+		Addr:   ap.Addr().As16(),
+		ZoneId: zoneId,
 	}
 }
