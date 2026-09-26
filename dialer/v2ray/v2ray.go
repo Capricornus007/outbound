@@ -222,11 +222,42 @@ func (s *V2Ray) Dialer(option *dialer.ExtraOption, nextDialer netproxy.Dialer) (
 		if serviceName == "" {
 			serviceName = "GunService"
 		}
-		d = &grpc.Dialer{
-			NextDialer:    d,
-			ServiceName:   serviceName,
-			ServerName:    sni,
-			AllowInsecure: s.AllowInsecure || option.AllowInsecure,
+		// security=reality on top of type=grpc: REALITY is an underlying-stream
+		// transport, so it must wrap the raw dialer *before* gRPC frames its
+		// HTTP/2 tunnels on top. gRPC then runs in plaintext-h2 mode (see
+		// Dialer.UpperEncrypted) instead of doing its own standard TLS, otherwise
+		// we would attempt a REALITY + TLS double handshake that the server never
+		// completes. Behaviour for every non-reality grpc node is unchanged.
+		if s.TLS == "reality" {
+			realityURL := url.URL{
+				Scheme: "reality",
+				Host:   net.JoinHostPort(s.Add, s.Port),
+				RawQuery: url.Values{
+					"sni": []string{sni},
+					"fp":  []string{s.Fingerprint},
+					"sid": []string{s.ShortId},
+					"pbk": []string{s.PublicKey},
+					"spx": []string{s.SpiderX},
+				}.Encode(),
+			}
+			d, err = tls.NewReality(realityURL.String(), d)
+			if err != nil {
+				return nil, nil, err
+			}
+			d = &grpc.Dialer{
+				NextDialer:     d,
+				ServiceName:    serviceName,
+				ServerName:     sni,
+				AllowInsecure:  s.AllowInsecure || option.AllowInsecure,
+				UpperEncrypted: true,
+			}
+		} else {
+			d = &grpc.Dialer{
+				NextDialer:    d,
+				ServiceName:   serviceName,
+				ServerName:    sni,
+				AllowInsecure: s.AllowInsecure || option.AllowInsecure,
+			}
 		}
 	case "http", "http2", "h2":
 		sni := s.SNI

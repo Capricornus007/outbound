@@ -94,8 +94,8 @@ func TestCleanScopedClientConnectionCacheOnlyClosesMatchingScope(t *testing.T) {
 	cc2 := mustDialTestClientConn(t, listener2.Addr().String())
 	globalCCAccess.Lock()
 	globalCCMap = map[string]*clientConnMeta{
-		grpcClientCacheKey("scope-a", "", listener1.Addr().String(), false, 0, false): {cc: cc1},
-		grpcClientCacheKey("scope-b", "", listener2.Addr().String(), false, 0, false): {cc: cc2},
+		grpcClientCacheKey("scope-a", "", listener1.Addr().String(), false, false, 0, false): {cc: cc1},
+		grpcClientCacheKey("scope-b", "", listener2.Addr().String(), false, false, 0, false): {cc: cc2},
 	}
 	globalCCAccess.Unlock()
 

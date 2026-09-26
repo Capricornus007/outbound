@@ -21,6 +21,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
 )
@@ -35,8 +36,15 @@ var (
 	globalCCAccess sync.Mutex
 )
 
-func grpcClientCacheKey(scope, serverName, address string, allowInsecure bool, somark uint32, mptcp bool) string {
-	return fmt.Sprintf("%s\x00%s\x00%s\x00%t\x00%d\x00%t", scope, serverName, address, allowInsecure, somark, mptcp)
+// grpcClientCacheKey builds the connection-reuse key for the shared gRPC
+// ClientConn cache. upperEncrypted records whether the transport chain that
+// produced address is already confidentiality-protected by an inner dialer
+// (e.g. REALITY applied by the caller). It must be part of the key, otherwise
+// a REALITY-wrapped gRPC node and a plain gRPC node that happen to share the
+// same sni/host:port would be served the very same ClientConn — the reuse
+// would silently tunnel one node's traffic through the other's handshake.
+func grpcClientCacheKey(scope, serverName, address string, allowInsecure, upperEncrypted bool, somark uint32, mptcp bool) string {
+	return fmt.Sprintf("%s\x00%s\x00%s\x00%t\x00%t\x00%d\x00%t", scope, serverName, address, allowInsecure, upperEncrypted, somark, mptcp)
 }
 
 func scopedCachePrefix(scope string) string {
@@ -443,6 +451,14 @@ type Dialer struct {
 	ServiceName   string
 	ServerName    string
 	AllowInsecure bool
+	// UpperEncrypted marks that NextDialer already provides transport-level
+	// confidentiality (REALITY applied by the caller). When true the gRPC layer
+	// MUST NOT negotiate its own standard TLS handshake on top, or the result is
+	// a REALITY+TLS double handshake that never reaches the server's gRPC
+	// service. In that case gRPC runs its HTTP/2 framing as plaintext over the
+	// already-encrypted REALITY stream via insecure.NewCredentials(). Defaults to
+	// false, preserving the historical behaviour for plain ws/grpc/TLS nodes.
+	UpperEncrypted bool
 }
 
 func (d *Dialer) UnwrapDialer() netproxy.Dialer {
@@ -454,7 +470,7 @@ func (d *Dialer) DialContext(ctx context.Context, network string, address string
 	if err != nil {
 		return nil, err
 	}
-	meta, cancel, err := getGrpcClientConn(ctx, d.NextDialer, d.ServerName, address, d.AllowInsecure, magicNetwork.Mark, magicNetwork.Mptcp)
+	meta, cancel, err := getGrpcClientConn(ctx, d.NextDialer, d.ServerName, address, d.AllowInsecure, d.UpperEncrypted, magicNetwork.Mark, magicNetwork.Mptcp)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -507,15 +523,28 @@ func systemCertPoolCached() (*x509.CertPool, error) {
 	return systemCertPool, systemCertPoolErr
 }
 
-func getGrpcClientConn(ctx context.Context, tcpDialer netproxy.Dialer, serverName string, address string, allowInsecure bool, somark uint32, mptcp bool) (*clientConnMeta, ccCanceller, error) {
+func getGrpcClientConn(ctx context.Context, tcpDialer netproxy.Dialer, serverName string, address string, allowInsecure, upperEncrypted bool, somark uint32, mptcp bool) (*clientConnMeta, ccCanceller, error) {
 	scope := netproxy.TransportCacheNamespace(tcpDialer)
-	cacheKey := grpcClientCacheKey(scope, serverName, address, allowInsecure, somark, mptcp)
-	// allowInsecure?
-	roots, err := systemCertPoolCached()
-	if err != nil {
-		return nil, func() {}, fmt.Errorf("failed to get system certificate pool")
+	cacheKey := grpcClientCacheKey(scope, serverName, address, allowInsecure, upperEncrypted, somark, mptcp)
+	var (
+		certOption grpc.DialOption
+		err        error
+	)
+	if upperEncrypted {
+		// The inner transport (REALITY applied by the caller) already provides an
+		// authenticated, encrypted stream. gRPC must therefore run its HTTP/2
+		// framing as plaintext on top of it; negotiating a second TLS handshake
+		// here would double-encrypt and never speak the server's gRPC service.
+		certOption = grpc.WithTransportCredentials(insecure.NewCredentials())
+	} else {
+		// allowInsecure?
+		var roots *x509.CertPool
+		roots, err = systemCertPoolCached()
+		if err != nil {
+			return nil, func() {}, fmt.Errorf("failed to get system certificate pool")
+		}
+		certOption = grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{ServerName: serverName, RootCAs: roots, InsecureSkipVerify: allowInsecure}))
 	}
-	certOption := grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{ServerName: serverName, RootCAs: roots, InsecureSkipVerify: allowInsecure}))
 
 	// Hold the cache lock across lookup, dial and store: grpc.DialContext is
 	// lazy (it does not wait for the connection), and doing the dial outside
