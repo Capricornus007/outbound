@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"sync"
 	"sync/atomic"
 	"syscall"
 
@@ -97,6 +98,15 @@ func (d *lazyDirectDialer) LookupIPAddr(ctx context.Context, network, host strin
 type Option struct {
 	FullCone    bool
 	FallbackDNS string
+	// WithCache 記住某個域名上次成功連線用到的 IP。它與 FallbackDNS 是互補的兩條退路：
+	// 前者完全不碰 DNS（DNS 全掛時才有意義），後者是換一個解析器重新問。
+	WithCache bool
+}
+
+// addrCache 只留最近一筆：直連域名通常就那幾個，命中率換記憶體成本不划算。
+type addrCache struct {
+	lastAddr     string
+	lastRemoteIp string
 }
 
 type directDialer struct {
@@ -105,6 +115,9 @@ type directDialer struct {
 	udpLocalAddr   *net.UDPAddr
 	receiver       *packetReceiverRegistry
 	Option         Option
+
+	muCache sync.Mutex
+	cache   addrCache
 }
 
 func NewDirectDialerLaddr(lAddr netip.Addr, option Option) netproxy.Dialer {
@@ -128,22 +141,68 @@ func NewDirectDialerLaddr(lAddr netip.Addr, option Option) netproxy.Dialer {
 	return d
 }
 
-func (d *directDialer) tryRetry(err error, addr string, callback func()) {
-	host, _, _ := net.SplitHostPort(addr)
-	// Check if the host is domain
-	if _, e := netip.ParseAddr(host); e == nil {
-		// addr is IP
+// recordRemoteIP 在成功拿到連線後記住這個域名的 IP，供 DNS 失效時退避使用。
+func (d *directDialer) recordRemoteIP(addr string, remote net.Addr) {
+	if !d.Option.WithCache || remote == nil {
 		return
 	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host == "" || port == "" {
+		return
+	}
+	if _, e := netip.ParseAddr(host); e == nil {
+		return // 本來就是 IP，沒什麼好記的
+	}
+	ip, _, err := net.SplitHostPort(remote.String())
+	if err != nil || ip == "" {
+		return
+	}
+	d.muCache.Lock()
+	d.cache = addrCache{lastAddr: host, lastRemoteIp: ip}
+	d.muCache.Unlock()
+}
 
-	// addr is domain
-	if err != nil {
-		// The resolver surfaces *net.DNSError/*net.OpError, never the bare
-		// sentinel; an identity comparison here would never fire and the
-		// fallback-DNS retry would silently rot away.
-		if outbounderrors.IsDNSTimeout(err) {
-			callback()
+func (d *directDialer) cachedIPFor(host string) string {
+	if !d.Option.WithCache {
+		return ""
+	}
+	d.muCache.Lock()
+	defer d.muCache.Unlock()
+	if d.cache.lastAddr == host && d.cache.lastRemoteIp != "" {
+		return d.cache.lastRemoteIp
+	}
+	return ""
+}
+
+// tryRetry 在解析逾時時依序試兩條退路。callback 收到「該改用哪個位址重試」，並把
+// 那次重試的結果回報回來：
+//  1. 上次成功連線記下的 IP——完全不問 DNS，所以解析整個掛掉時它還能動；
+//  2. 配了 fallback DNS，就用它把域名重新解析一次。
+//
+// 兩條是疊加的、不是二選一：快取那筆連不上時仍會走重新解析。失敗時 callback 必須
+// 原封不動回報錯誤、不動呼叫端的結果，否則錯誤會被改寫成「連到舊 IP 失敗」，
+// 真正的原因（解析逾時）就看不見了。
+func (d *directDialer) tryRetry(err error, addr string, callback func(target string) error) {
+	host, port, e := net.SplitHostPort(addr)
+	if e != nil || port == "" {
+		return
+	}
+	if _, e := netip.ParseAddr(host); e == nil {
+		return // addr 本来就是 IP，没有可退避的解析失败
+	}
+	// The resolver surfaces *net.DNSError/*net.OpError, never the bare
+	// sentinel; an identity comparison here would never fire and the
+	// retry would silently rot away.
+	if err == nil || !outbounderrors.IsDNSTimeout(err) {
+		return
+	}
+	if ip := d.cachedIPFor(host); ip != "" {
+		if callback(net.JoinHostPort(ip, port)) == nil {
+			return
 		}
+	}
+	if d.Option.FallbackDNS != "" {
+		callback(addr) // 換一個解析器再問一次；成敗都由 callback 自己決定留不留
 	}
 }
 
@@ -179,10 +238,15 @@ func preferredNetwork(baseNetwork, ipVersion string) string {
 
 func (d *directDialer) dialUdp(ctx context.Context, addr string, mark int, ipVersion string, fallback bool) (c netproxy.PacketConn, err error) {
 	network := preferredNetwork("udp", ipVersion)
-	if d.Option.FallbackDNS != "" && !fallback {
+	if !fallback && (d.Option.WithCache || d.Option.FallbackDNS != "") {
 		defer func() { // don't remove func wrapper for d.tryRetry
-			d.tryRetry(err, addr, func() {
-				c, err = d.dialUdp(ctx, addr, mark, ipVersion, true)
+			d.tryRetry(err, addr, func(target string) error {
+				c2, err2 := d.dialUdp(ctx, target, mark, ipVersion, true)
+				if err2 != nil {
+					return err2
+				}
+				c, err = c2, nil
+				return nil
 			})
 		}()
 	}
@@ -255,10 +319,15 @@ func (d *directDialer) dialUdp(ctx context.Context, addr string, mark int, ipVer
 
 func (d *directDialer) dialTcp(ctx context.Context, addr string, mark int, ipVersion string, mptcp bool, fallback bool) (c net.Conn, err error) {
 	network := preferredNetwork("tcp", ipVersion)
-	if d.Option.FallbackDNS != "" && !fallback {
+	if !fallback && (d.Option.WithCache || d.Option.FallbackDNS != "") {
 		defer func() { // don't remove func wrapper for d.tryRetry
-			d.tryRetry(err, addr, func() {
-				c, err = d.dialTcp(ctx, addr, mark, ipVersion, mptcp, true)
+			d.tryRetry(err, addr, func(target string) error {
+				c2, err2 := d.dialTcp(ctx, target, mark, ipVersion, mptcp, true)
+				if err2 != nil {
+					return err2
+				}
+				c, err = c2, nil
+				return nil
 			})
 		}()
 	}
@@ -272,7 +341,11 @@ func (d *directDialer) dialTcp(ctx context.Context, addr string, mark int, ipVer
 		return netproxy.TCPDialControl(c, mark, address)
 	}
 	dialer.Resolver = d.createResolver(mark, fallback)
-	return dialer.DialContext(ctx, network, addr)
+	c, err = dialer.DialContext(ctx, network, addr)
+	if err == nil && c != nil {
+		d.recordRemoteIP(addr, c.RemoteAddr())
+	}
+	return c, err
 }
 
 func (d *directDialer) lookupIPAddr(ctx context.Context, host string, mark int, fallback bool) ([]net.IPAddr, error) {
