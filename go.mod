@@ -1,6 +1,6 @@
 module github.com/daeuniverse/outbound
 
-go 1.24
+go 1.27.1
 
 require (
 	github.com/awnumar/fastrand v0.0.0-20210315215012-30ee0990fa2d
