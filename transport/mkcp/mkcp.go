@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"strconv"
 	"sync/atomic"
 
 	"github.com/daeuniverse/outbound/common/buf"
@@ -41,89 +40,10 @@ func NewMkcp(option *dialer.ExtraOption, nextDialer netproxy.Dialer, link string
 		return nil, nil, fmt.Errorf("NewMkcp: %w", err)
 	}
 
-	config := DefaultConfig()
-
-	query := u.Query()
-
-	// Parse MTU
-	if mtuStr := query.Get("mtu"); mtuStr != "" {
-		mtu, err := strconv.ParseUint(mtuStr, 10, 32)
-		if err != nil {
-			return nil, nil, fmt.Errorf("NewMkcp: invalid mtu: %w", err)
-		}
-		config.MTU = uint32(mtu)
+	config, err := ConfigFromQuery(u.Query())
+	if err != nil {
+		return nil, nil, fmt.Errorf("NewMkcp: %w", err)
 	}
-
-	// Parse TTI
-	if ttiStr := query.Get("tti"); ttiStr != "" {
-		tti, err := strconv.ParseUint(ttiStr, 10, 32)
-		if err != nil {
-			return nil, nil, fmt.Errorf("NewMkcp: invalid tti: %w", err)
-		}
-		config.TTI = uint32(tti)
-	}
-
-	// Parse Uplink Capacity
-	if uplinkStr := query.Get("uplink"); uplinkStr != "" {
-		uplink, err := strconv.ParseUint(uplinkStr, 10, 32)
-		if err != nil {
-			return nil, nil, fmt.Errorf("NewMkcp: invalid uplink: %w", err)
-		}
-		config.UplinkCapacity = uint32(uplink)
-	}
-	if uplinkStr := query.Get("uplinkCapacity"); uplinkStr != "" {
-		uplink, err := strconv.ParseUint(uplinkStr, 10, 32)
-		if err != nil {
-			return nil, nil, fmt.Errorf("NewMkcp: invalid uplinkCapacity: %w", err)
-		}
-		config.UplinkCapacity = uint32(uplink)
-	}
-
-	// Parse Downlink Capacity
-	if downlinkStr := query.Get("downlink"); downlinkStr != "" {
-		downlink, err := strconv.ParseUint(downlinkStr, 10, 32)
-		if err != nil {
-			return nil, nil, fmt.Errorf("NewMkcp: invalid downlink: %w", err)
-		}
-		config.DownlinkCapacity = uint32(downlink)
-	}
-	if downlinkStr := query.Get("downlinkCapacity"); downlinkStr != "" {
-		downlink, err := strconv.ParseUint(downlinkStr, 10, 32)
-		if err != nil {
-			return nil, nil, fmt.Errorf("NewMkcp: invalid downlinkCapacity: %w", err)
-		}
-		config.DownlinkCapacity = uint32(downlink)
-	}
-
-	// Parse Write Buffer Size
-	if writeBufferStr := query.Get("writeBuffer"); writeBufferStr != "" {
-		writeBuffer, err := strconv.ParseUint(writeBufferStr, 10, 32)
-		if err != nil {
-			return nil, nil, fmt.Errorf("NewMkcp: invalid writeBuffer: %w", err)
-		}
-		config.WriteBufferSize = uint32(writeBuffer)
-	}
-
-	// Parse Read Buffer Size
-	if readBufferStr := query.Get("readBuffer"); readBufferStr != "" {
-		readBuffer, err := strconv.ParseUint(readBufferStr, 10, 32)
-		if err != nil {
-			return nil, nil, fmt.Errorf("NewMkcp: invalid readBuffer: %w", err)
-		}
-		config.ReadBufferSize = uint32(readBuffer)
-	}
-
-	// Parse Congestion
-	if congestionStr := query.Get("congestion"); congestionStr != "" {
-		congestion, err := strconv.ParseBool(congestionStr)
-		if err != nil {
-			return nil, nil, fmt.Errorf("NewMkcp: invalid congestion: %w", err)
-		}
-		config.Congestion = congestion
-	}
-
-	// Parse Seed
-	config.Seed = query.Get("seed")
 
 	m := &Mkcp{
 		dialer: nextDialer,
