@@ -100,6 +100,38 @@ func readMeekResponseBody(body io.Reader) ([]byte, error) {
 	return result, nil
 }
 
+// RoundTripStreaming sends a request and streams the response to the writer.
+// This enables processing response data as it arrives, reducing latency.
+func (c *httpTripperClient) RoundTripStreaming(ctx context.Context, req Request, respWriter io.Writer) error {
+	roundTripper := c.getRoundTripper()
+
+	connectionTagStr := base64.RawURLEncoding.EncodeToString(req.ConnectionTag)
+
+	httpRequest, err := http.NewRequest("POST", c.url, bytes.NewReader(req.Data))
+	if err != nil {
+		return err
+	}
+	httpRequest.Header.Set("X-Session-ID", connectionTagStr)
+	httpRequest = httpRequest.WithContext(ctx)
+
+	httpResp, err := roundTripper.RoundTrip(httpRequest)
+	if err != nil {
+		return err
+	}
+	defer httpResp.Body.Close()
+
+	// 串流的同時仍要套上回應體上限，否則這個路徑會繞過 readMeekResponseBody
+	// 那道防護（多讀 1 byte 用來判斷是否超標）。
+	n, err := io.Copy(respWriter, io.LimitReader(httpResp.Body, maxMeekResponseBodySize+1))
+	if err != nil {
+		return err
+	}
+	if n > maxMeekResponseBodySize {
+		return fmt.Errorf("meek: response body exceeds %d bytes", maxMeekResponseBodySize)
+	}
+	return nil
+}
+
 func (c *httpTripperClient) getRoundTripper() http.RoundTripper {
 	cacheKey := meekRoundTripperCacheKey(netproxy.TransportCacheNamespace(c.nextDialer), c.addr, c.url, c.tlsConfig)
 	globalRoundTripperCacheAccess.Lock()
