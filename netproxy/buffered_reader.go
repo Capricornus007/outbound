@@ -105,6 +105,16 @@ func (b *BufferedReaderConn) Read(p []byte) (int, error) {
 	return b.reader.Read(p)
 }
 
+// ReadBuffered reports how many decrypted bytes the bufio layer already
+// holds: every buffered byte is returned by a subsequent Read without
+// touching the network or the wrapped stream, which is exactly the
+// "more data has already arrived" signal write-batching copy loops need.
+// Layers below bufio (kernel socket) are not this wrapper's to observe;
+// callers combine this with their own socket-state checks.
+func (b *BufferedReaderConn) ReadBuffered() int {
+	return b.reader.Buffered()
+}
+
 // SetReadDeadline is forwarded to the underlying Conn. Note that bufio may
 // have already buffered data that will be returned before the deadline takes
 // effect on the next kernel read; this matches the semantics users expect

@@ -640,3 +640,11 @@ func (c *Conn) EncryptRespHeaderFromPool(header []byte) (b []byte, err error) {
 
 	return buf, nil
 }
+
+// ReadBuffered reports immediately-readable plaintext bytes by delegating
+// to the wrapped conn (the bufio layer owns the userspace queue for TLS
+// transports). It backs write-batching copy loops that must not issue
+// speculative reads or arm deadlines on record-framed streams.
+func (c *Conn) ReadBuffered() int {
+	return netproxy.ReadBuffered(c.Conn)
+}

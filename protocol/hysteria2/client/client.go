@@ -609,3 +609,15 @@ func (io *udpIOImpl) SendMessage(buf []byte, msg *protocol.UDPMessage) error {
 	}
 	return io.Conn.SendDatagram(buf[:msgN])
 }
+
+// ReadBuffered reports immediately-readable stream bytes from the QUIC
+// receive path. Until the deferred handshake response is consumed the
+// signal reports the stream only, never the pending response bytes, so it
+// stays conservative during fast open. It backs write-batching copy loops
+// that must not issue speculative reads or arm deadlines on streams.
+func (c *tcpConn) ReadBuffered() int {
+	if rb, ok := c.Orig.Stream.(interface{ ReadBuffered() int }); ok {
+		return rb.ReadBuffered()
+	}
+	return 0
+}
