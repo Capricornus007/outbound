@@ -266,3 +266,12 @@ func (c *Conn) ReadRespHeader() (err error) {
 func (c *Conn) ReadBuffered() int {
 	return netproxy.ReadBuffered(c.Conn)
 }
+
+// UnderlyingConn peels to the wrapped conn so unwrap walks reach the
+// transport socket through the protocol layer.
+func (c *Conn) UnderlyingConn() net.Conn {
+	if u, ok := c.Conn.(netproxy.UnderlyingConnProvider); ok {
+		return u.UnderlyingConn()
+	}
+	return nil
+}

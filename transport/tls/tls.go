@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"github.com/daeuniverse/outbound/pkg/coalesce"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -175,8 +176,23 @@ func (s *Tls) DialContext(ctx context.Context, network, addr string) (c netproxy
 			return nil, err
 		}
 		// Flush after every protocol Write so unmanaged Write/Read users
-		// never observe stalled records.
-		return coalesce.NewFlushConn(tlsConn, co), nil
+		// never observe stalled records. The forwarder keeps the raw socket
+		// reachable for UnwrapTCPConn: TLS conns are opaque to unwrapping,
+		// and copy loops below need the kernel receive-queue state to decide
+		// whether another read completes immediately (write batching).
+		fwd := netproxy.NewUnderlyingConnForwarder(
+			tlsConn, func() net.Conn {
+				// rc is a netproxy.Conn; peel it through the same
+				// FakeNetConn adapter the coalescer wraps.
+				if u, ok := rc.(interface{ UnderlyingConn() net.Conn }); ok {
+					return u.UnderlyingConn()
+				}
+				if nc, ok := rc.(net.Conn); ok {
+					return nc
+				}
+				return nil
+			})
+		return coalesce.NewFlushConn(fwd, co), nil
 	case "udp":
 		if s.passthroughUdp {
 			return s.dialer.DialContext(ctx, network, addr)
