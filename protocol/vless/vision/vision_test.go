@@ -33,7 +33,6 @@ func tlsBuffersResolved(conn *Conn) bool {
 	return conn.tlsBuffers.currentRawInput() != nil
 }
 
-
 func TestNewConnAcceptsTLSConn(t *testing.T) {
 	client, server := net.Pipe()
 	defer func() { _ = client.Close() }()
