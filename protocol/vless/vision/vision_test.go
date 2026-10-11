@@ -19,6 +19,21 @@ func (w *intrinsicConnWrapper) IntrinsicConn() netproxy.Conn {
 	return w.intrinsic
 }
 
+// tlsBuffersResolved 判「NewConn 真的有拿到 crypto/tls 內部的兩個讀取緩衝」。
+// 舊版 rawInput 是內嵌的 bytes.Buffer，兩個都必然非 nil；Go 1.28 起它是**延後分配**
+// 的 *bytes.Buffer，還沒讀過就是 nil 屬正常態，所以指標形態改要求「槽位解析得出來」
+// （rawInputSlot 非空）。斷言要認得這兩種形態，不然測試會把新版正當行為當成壞。
+func tlsBuffersResolved(conn *Conn) bool {
+	if conn.input == nil {
+		return false
+	}
+	if conn.tlsBuffers.rawInputPtr {
+		return conn.tlsBuffers.rawInputSlot != nil
+	}
+	return conn.tlsBuffers.currentRawInput() != nil
+}
+
+
 func TestNewConnAcceptsTLSConn(t *testing.T) {
 	client, server := net.Pipe()
 	defer func() { _ = client.Close() }()
@@ -29,7 +44,7 @@ func TestNewConnAcceptsTLSConn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewConn returned error: %v", err)
 	}
-	if conn.input == nil || conn.rawInput == nil {
+	if !tlsBuffersResolved(conn) {
 		t.Fatal("expected internal TLS buffers to be resolved")
 	}
 }
@@ -44,7 +59,7 @@ func TestNewConnAcceptsUTLSConn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewConn returned error: %v", err)
 	}
-	if conn.input == nil || conn.rawInput == nil {
+	if !tlsBuffersResolved(conn) {
 		t.Fatal("expected internal uTLS buffers to be resolved")
 	}
 }
@@ -60,7 +75,7 @@ func TestNewConnAcceptsRealityConn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewConn returned error: %v", err)
 	}
-	if conn.input == nil || conn.rawInput == nil {
+	if !tlsBuffersResolved(conn) {
 		t.Fatal("expected internal REALITY buffers to be resolved")
 	}
 }
@@ -91,7 +106,7 @@ func TestNewConnAcceptsBufferedReaderWrappedTLSConn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewConn returned error: %v", err)
 	}
-	if conn.input == nil || conn.rawInput == nil {
+	if !tlsBuffersResolved(conn) {
 		t.Fatal("expected internal TLS buffers to be resolved through the bufio wrapper")
 	}
 }
@@ -111,7 +126,7 @@ func TestNewConnAcceptsBufferedReaderWrappedRealityConn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewConn returned error: %v", err)
 	}
-	if conn.input == nil || conn.rawInput == nil {
+	if !tlsBuffersResolved(conn) {
 		t.Fatal("expected internal REALITY buffers to be resolved through the bufio wrapper")
 	}
 }

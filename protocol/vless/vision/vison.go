@@ -44,6 +44,6 @@ func NewConn(conn netproxy.Conn, userUUID []byte) (*Conn, error) {
 	c.Conn = underlayConn
 	c.tlsConn = tlsConn
 	c.input = readBuffers.input
-	c.rawInput = readBuffers.rawInput
+	c.tlsBuffers = readBuffers
 	return c, nil
 }

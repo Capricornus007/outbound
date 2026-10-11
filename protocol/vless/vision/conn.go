@@ -57,9 +57,15 @@ type Conn struct {
 	overlayConn netproxy.Conn // (vless.Conn)
 	userUUID    []byte
 
-	tlsConn  netproxy.Conn
-	input    *bytes.Reader
-	rawInput *bytes.Buffer
+	tlsConn netproxy.Conn
+	input   *bytes.Reader
+	// tlsBuffers 保留「槽位」而不是只存一份 rawInput：Go 1.28 起 crypto/tls 的
+	// rawInput 是延後分配的 *bytes.Buffer，建連線當時抓到 nil 並不代表之後都是
+	// nil，所以每次要用都得經 tlsBuffers.currentRawInput() 重讀。
+	tlsBuffers visionTLSReadBuffers
+	// rawInputDrained 取代舊寫法「把 vc.rawInput 設成 nil 當讀乾記號」——
+	// 新版每次重讀都會把那個 nil 蓋回來，記號必須另存。
+	rawInputDrained bool
 
 	needHandshake              bool
 	readRemainingContent       int
@@ -263,22 +269,24 @@ func (vc *Conn) read(b []byte) (int, error) {
 					return len(b), nil
 				}
 			}
-			if vc.rawInput != nil {
-				// logrus.Infoln("commandPaddingDirect: 2")
-				if vc.rawInput.Len() > 0 {
-					_n, err := vc.rawInput.Read(b[n:])
-					if err != nil {
-						return n + _n, err
+			if !vc.rawInputDrained {
+				if rawInput := vc.tlsBuffers.currentRawInput(); rawInput != nil {
+					// logrus.Infoln("commandPaddingDirect: 2")
+					if rawInput.Len() > 0 {
+						_n, err := rawInput.Read(b[n:])
+						if err != nil {
+							return n + _n, err
+						}
+						n += _n
 					}
-					n += _n
-				}
-				needReturn = true
-				// logrus.Infoln("commandPaddingDirect: 2?", vc.rawInput.Len())
-				if vc.rawInput.Len() == 0 {
-					vc.rawInput = nil
+					needReturn = true
+					// logrus.Infoln("commandPaddingDirect: 2?", rawInput.Len())
+					if rawInput.Len() == 0 {
+						vc.rawInputDrained = true
+					}
 				}
 			}
-			if vc.input == nil && vc.rawInput == nil {
+			if vc.input == nil && (vc.rawInputDrained || vc.tlsBuffers.currentRawInput() == nil) {
 				vc.toReadDirect = true
 				vc.reader.directRead = true
 				// logrus.Infoln("XTLS Vision direct read start")
