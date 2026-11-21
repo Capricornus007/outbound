@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install Go from the feed (golang/go master tip)
         uses: Capricornus007/repo/.github/actions/setup-feed-go@master
       # 原本那步 Go 安裝順帶開了 module 快取；composite 不管快取 → 顯式補一步。
@@ -42,7 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install Go from the feed (golang/go master tip)
         uses: Capricornus007/repo/.github/actions/setup-feed-go@master
       # 原本那步 Go 安裝順帶開了 module 快取；composite 不管快取 → 顯式補一步。
