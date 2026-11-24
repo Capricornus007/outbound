@@ -15,18 +15,18 @@ require (
 	github.com/mzz2017/disk-bloom v1.0.1
 	github.com/olicesx/quic-go v0.0.0-20260910141758-62d80bbebb5b
 	github.com/refraction-networking/utls v1.8.2
-	github.com/sagernet/sing v0.9.7-0.20261022215834-56e8e9fb54a4
+	github.com/sagernet/sing v0.9.7-0.20261110095940-27b73774b240
 	github.com/sagernet/sing-shadowtls v0.2.1
 	github.com/samber/oops v1.23.2
 	github.com/seiflotfy/cuckoofilter v0.0.0-20240715131351-a2f2c23f1771
 	github.com/sirupsen/logrus v1.10.2
 	github.com/stretchr/testify v1.12.1
 	gitlab.com/yawning/chacha20.git v0.0.0-20230427033715-7877545b1b37
-	golang.org/x/crypto v0.58.0
-	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e
-	golang.org/x/net v0.61.0
-	golang.org/x/sync v0.24.0
-	golang.org/x/sys v0.49.0
+	golang.org/x/crypto v0.59.1-0.20261123192653-4dc4fb521066
+	golang.org/x/exp v0.0.0-20261124000051-d6646c509b6d
+	golang.org/x/net v0.63.1-0.20261119175338-fd4c9ad54137
+	golang.org/x/sync v0.25.0
+	golang.org/x/sys v0.50.1-0.20261120131340-d4690d67735d
 	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
 	lukechampine.com/blake3 v1.4.1
@@ -55,9 +55,9 @@ require (
 	go.opentelemetry.io/otel/trace v1.47.0 // indirect
 	go.uber.org/mock v0.6.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/mod v0.42.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
-	golang.org/x/tools v0.52.0 // indirect
+	golang.org/x/mod v0.43.1-0.20261112161916-2b553c8b61bf // indirect
+	golang.org/x/text v0.44.1-0.20261117190556-9e7a977af666 // indirect
+	golang.org/x/tools v0.53.1-0.20261123215244-e10a8136e8de // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261019180522-ce908d29299b // indirect
 )
 
